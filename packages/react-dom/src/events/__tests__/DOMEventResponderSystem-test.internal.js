@@ -422,6 +422,7 @@ describe('DOMEventResponderSystem', () => {
             target: event.target,
             type: 'magicclick',
             phase: 'bubble',
+            timeStamp: context.getTimeStamp(),
           };
           context.dispatchEvent(syntheticEvent, props.onMagicClick, {
             discrete: true,
@@ -434,6 +435,7 @@ describe('DOMEventResponderSystem', () => {
             target: event.target,
             type: 'magicclick',
             phase: 'capture',
+            timeStamp: context.getTimeStamp(),
           };
           context.dispatchEvent(syntheticEvent, props.onMagicClick, {
             discrete: true,
@@ -477,6 +479,7 @@ describe('DOMEventResponderSystem', () => {
         target: event.target,
         type: 'press',
         phase,
+        timeStamp: context.getTimeStamp(),
       };
       context.dispatchEvent(pressEvent, props.onPress, {discrete: true});
 
@@ -486,6 +489,7 @@ describe('DOMEventResponderSystem', () => {
             target: event.target,
             type: 'longpress',
             phase,
+            timeStamp: context.getTimeStamp(),
           };
           context.dispatchEvent(longPressEvent, props.onLongPress, {
             discrete: true,
@@ -497,6 +501,7 @@ describe('DOMEventResponderSystem', () => {
             target: event.target,
             type: 'longpresschange',
             phase,
+            timeStamp: context.getTimeStamp(),
           };
           context.dispatchEvent(longPressChangeEvent, props.onLongPressChange, {
             discrete: true,
@@ -710,7 +715,7 @@ describe('DOMEventResponderSystem', () => {
     ]);
   });
 
-  it('isTargetDirectlyWithinEventComponent works', () => {
+  it('isTargetWithinEventResponderScope works', () => {
     const buttonRef = React.createRef();
     const divRef = React.createRef();
     const log = [];
@@ -720,7 +725,7 @@ describe('DOMEventResponderSystem', () => {
       undefined,
       undefined,
       (event, context) => {
-        const isWithin = context.isTargetDirectlyWithinEventComponent(
+        const isWithin = context.isTargetWithinEventResponderScope(
           event.nativeEvent.relatedTarget,
         );
         log.push(isWithin);
@@ -756,5 +761,232 @@ describe('DOMEventResponderSystem', () => {
     );
 
     expect(log).toEqual([false, true, false]);
+  });
+
+  it('the event responder target listeners should correctly fire for only their events', () => {
+    let clickEventComponent1Fired = 0;
+    let clickEventComponent2Fired = 0;
+    let eventLog = [];
+    const buttonRef = React.createRef();
+
+    const ClickEventComponent1 = createReactEventComponent(
+      [{name: 'click', passive: false, capture: false}],
+      undefined,
+      undefined,
+      event => {
+        clickEventComponent1Fired++;
+        eventLog.push({
+          name: event.type,
+          passive: event.passive,
+          passiveSupported: event.passiveSupported,
+        });
+      },
+    );
+
+    const ClickEventComponent2 = createReactEventComponent(
+      [{name: 'click', passive: true, capture: false}],
+      undefined,
+      undefined,
+      event => {
+        clickEventComponent2Fired++;
+        eventLog.push({
+          name: event.type,
+          passive: event.passive,
+          passiveSupported: event.passiveSupported,
+        });
+      },
+    );
+
+    const Test = () => (
+      <ClickEventComponent1>
+        <ClickEventComponent2>
+          <button ref={buttonRef}>Click me!</button>
+        </ClickEventComponent2>
+      </ClickEventComponent1>
+    );
+
+    ReactDOM.render(<Test />, container);
+
+    let buttonElement = buttonRef.current;
+    dispatchClickEvent(buttonElement);
+
+    expect(clickEventComponent1Fired).toBe(1);
+    expect(clickEventComponent2Fired).toBe(1);
+    expect(eventLog.length).toBe(2);
+    expect(eventLog).toEqual([
+      {
+        name: 'click',
+        passive: false,
+        passiveSupported: false,
+      },
+      {
+        name: 'click',
+        passive: false,
+        passiveSupported: true,
+      },
+    ]);
+  });
+
+  it('the event responder root listeners should correctly fire for only their events', () => {
+    let clickEventComponent1Fired = 0;
+    let clickEventComponent2Fired = 0;
+    let eventLog = [];
+
+    const ClickEventComponent1 = createReactEventComponent(
+      undefined,
+      [{name: 'click', passive: false, capture: false}],
+      undefined,
+      undefined,
+      undefined,
+      event => {
+        clickEventComponent1Fired++;
+        eventLog.push({
+          name: event.type,
+          passive: event.passive,
+          passiveSupported: event.passiveSupported,
+        });
+      },
+    );
+
+    const ClickEventComponent2 = createReactEventComponent(
+      undefined,
+      [{name: 'click', passive: true, capture: false}],
+      undefined,
+      undefined,
+      undefined,
+      event => {
+        clickEventComponent2Fired++;
+        eventLog.push({
+          name: event.type,
+          passive: event.passive,
+          passiveSupported: event.passiveSupported,
+        });
+      },
+    );
+
+    const Test = () => (
+      <ClickEventComponent1>
+        <ClickEventComponent2>
+          <button>Click me!</button>
+        </ClickEventComponent2>
+      </ClickEventComponent1>
+    );
+
+    ReactDOM.render(<Test />, container);
+
+    dispatchClickEvent(document.body);
+
+    expect(clickEventComponent1Fired).toBe(1);
+    expect(clickEventComponent2Fired).toBe(1);
+    expect(eventLog.length).toBe(2);
+    expect(eventLog).toEqual([
+      {
+        name: 'click',
+        passive: false,
+        passiveSupported: false,
+      },
+      {
+        name: 'click',
+        passive: false,
+        passiveSupported: true,
+      },
+    ]);
+
+    ReactDOM.render(<Test />, container);
+  });
+
+  it('the event responder system should warn on accessing invalid properties', () => {
+    const ClickEventComponent = createReactEventComponent(
+      undefined,
+      ['click'],
+      undefined,
+      undefined,
+      undefined,
+      (event, context, props) => {
+        const syntheticEvent = {
+          target: event.target,
+          type: 'click',
+          timeStamp: context.getTimeStamp(),
+        };
+        context.dispatchEvent(syntheticEvent, props.onClick, {
+          discrete: true,
+        });
+      },
+    );
+
+    let handler;
+    const Test = () => (
+      <ClickEventComponent onClick={handler}>
+        <button>Click me!</button>
+      </ClickEventComponent>
+    );
+    expect(() => {
+      handler = event => {
+        event.preventDefault();
+      };
+      ReactDOM.render(<Test />, container);
+      dispatchClickEvent(document.body);
+    }).toWarnDev(
+      'Warning: preventDefault() is not available on event objects created ' +
+        'from event responder modules (React Flare).',
+      {withoutStack: true},
+    );
+    expect(() => {
+      handler = event => {
+        event.stopPropagation();
+      };
+      ReactDOM.render(<Test />, container);
+      dispatchClickEvent(document.body);
+    }).toWarnDev(
+      'Warning: stopPropagation() is not available on event objects created ' +
+        'from event responder modules (React Flare).',
+      {withoutStack: true},
+    );
+    expect(() => {
+      handler = event => {
+        event.isDefaultPrevented();
+      };
+      ReactDOM.render(<Test />, container);
+      dispatchClickEvent(document.body);
+    }).toWarnDev(
+      'Warning: isDefaultPrevented() is not available on event objects created ' +
+        'from event responder modules (React Flare).',
+      {withoutStack: true},
+    );
+    expect(() => {
+      handler = event => {
+        event.isPropagationStopped();
+      };
+      ReactDOM.render(<Test />, container);
+      dispatchClickEvent(document.body);
+    }).toWarnDev(
+      'Warning: isPropagationStopped() is not available on event objects created ' +
+        'from event responder modules (React Flare).',
+      {withoutStack: true},
+    );
+    expect(() => {
+      handler = event => {
+        return event.nativeEvent;
+      };
+      ReactDOM.render(<Test />, container);
+      dispatchClickEvent(document.body);
+    }).toWarnDev(
+      'Warning: nativeEvent is not available on event objects created ' +
+        'from event responder modules (React Flare).',
+      {withoutStack: true},
+    );
+    expect(() => {
+      handler = event => {
+        return event.defaultPrevented;
+      };
+      ReactDOM.render(<Test />, container);
+      dispatchClickEvent(document.body);
+    }).toWarnDev(
+      'Warning: defaultPrevented is not available on event objects created ' +
+        'from event responder modules (React Flare).',
+      {withoutStack: true},
+    );
+
+    expect(container.innerHTML).toBe('<button>Click me!</button>');
   });
 });

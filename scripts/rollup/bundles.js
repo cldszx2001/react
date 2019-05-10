@@ -487,9 +487,9 @@ const bundles = [
       FB_WWW_PROD,
     ],
     moduleType: NON_FIBER_RENDERER,
-    entry: 'react-events/Press',
+    entry: 'react-events/press',
     global: 'ReactEventsPress',
-    externals: [],
+    externals: ['react'],
   },
 
   {
@@ -502,9 +502,9 @@ const bundles = [
       FB_WWW_PROD,
     ],
     moduleType: NON_FIBER_RENDERER,
-    entry: 'react-events/Hover',
+    entry: 'react-events/hover',
     global: 'ReactEventsHover',
-    externals: [],
+    externals: ['react'],
   },
 
   {
@@ -517,9 +517,9 @@ const bundles = [
       FB_WWW_PROD,
     ],
     moduleType: NON_FIBER_RENDERER,
-    entry: 'react-events/Focus',
+    entry: 'react-events/focus',
     global: 'ReactEventsFocus',
-    externals: [],
+    externals: ['react'],
   },
 
   {
@@ -532,9 +532,9 @@ const bundles = [
       FB_WWW_PROD,
     ],
     moduleType: NON_FIBER_RENDERER,
-    entry: 'react-events/FocusScope',
+    entry: 'react-events/focus-scope',
     global: 'ReactEventsFocusScope',
-    externals: [],
+    externals: ['react'],
   },
 
   {
@@ -547,9 +547,9 @@ const bundles = [
       FB_WWW_PROD,
     ],
     moduleType: NON_FIBER_RENDERER,
-    entry: 'react-events/Swipe',
+    entry: 'react-events/swipe',
     global: 'ReactEventsSwipe',
-    externals: [],
+    externals: ['react'],
   },
 
   {
@@ -562,9 +562,9 @@ const bundles = [
       FB_WWW_PROD,
     ],
     moduleType: NON_FIBER_RENDERER,
-    entry: 'react-events/Drag',
+    entry: 'react-events/drag',
     global: 'ReactEventsDrag',
-    externals: [],
+    externals: ['react'],
   },
 ];
 

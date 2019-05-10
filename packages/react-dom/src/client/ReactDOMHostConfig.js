@@ -896,15 +896,6 @@ export function mountEventComponent(
   eventComponentInstance: ReactEventComponentInstance,
 ): void {
   if (enableEventAPI) {
-    updateEventComponent(eventComponentInstance);
-    mountEventResponder(eventComponentInstance);
-  }
-}
-
-export function updateEventComponent(
-  eventComponentInstance: ReactEventComponentInstance,
-): void {
-  if (enableEventAPI) {
     const rootContainerInstance = ((eventComponentInstance.rootInstance: any): Container);
     const rootElement = rootContainerInstance.ownerDocument;
     const responder = eventComponentInstance.responder;
@@ -919,7 +910,14 @@ export function updateEventComponent(
       );
       listenToEventResponderEventTypes(rootEventTypes, rootElement);
     }
+    mountEventResponder(eventComponentInstance);
   }
+}
+
+export function updateEventComponent(
+  eventComponentInstance: ReactEventComponentInstance,
+): void {
+  // NO-OP, why might use this in the future
 }
 
 export function unmountEventComponent(
@@ -948,11 +946,14 @@ export function getEventTargetChildElement(
           style: {
             position: 'absolute',
             zIndex: -1,
+            pointerEvents: null,
             bottom: bottom ? `-${bottom}px` : '0px',
             left: left ? `-${left}px` : '0px',
             right: right ? `-${right}px` : '0px',
             top: top ? `-${top}px` : '0px',
           },
+          hydrateTouchHitTarget: true,
+          suppressHydrationWarning: true,
         },
       };
     }

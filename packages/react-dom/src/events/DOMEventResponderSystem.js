@@ -64,6 +64,7 @@ type ResponderTimer = {|
   instance: ReactEventComponentInstance,
   func: () => void,
   id: Symbol,
+  timeStamp: number,
 |};
 
 const activeTimeouts: Map<Symbol, ResponderTimeout> = new Map();
@@ -73,7 +74,7 @@ const rootEventTypesToEventComponentInstances: Map<
 > = new Map();
 const targetEventTypeCached: Map<
   Array<ReactEventResponderEventType>,
-  Set<DOMTopLevelEventType>,
+  Set<string>,
 > = new Map();
 const ownershipChangeListeners: Set<ReactEventComponentInstance> = new Set();
 const PossiblyWeakMap = typeof WeakMap === 'function' ? WeakMap : Map;
@@ -90,6 +91,7 @@ const responderOwners: Map<
 > = new Map();
 let globalOwner = null;
 
+let currentTimeStamp = 0;
 let currentTimers = new Map();
 let currentInstance: null | ReactEventComponentInstance = null;
 let currentEventQueue: null | EventQueue = null;
@@ -101,28 +103,45 @@ const eventResponderContext: ReactResponderContext = {
     {discrete}: ReactResponderDispatchEventOptions,
   ): void {
     validateResponderContext();
-    const {target, type} = possibleEventObject;
+    const {target, type, timeStamp} = possibleEventObject;
 
-    if (target == null || type == null) {
+    if (target == null || type == null || timeStamp == null) {
       throw new Error(
-        'context.dispatchEvent: "target" and "type" fields on event object are required.',
+        'context.dispatchEvent: "target", "timeStamp", and "type" fields on event object are required.',
       );
     }
     if (__DEV__) {
-      possibleEventObject.preventDefault = () => {
-        // Update this warning when we have a story around dealing with preventDefault
+      const showWarning = name => {
         warning(
           false,
-          'preventDefault() is no longer available on event objects created from event responder modules.',
+          '%s is not available on event objects created from event responder modules (React Flare).',
+          name,
         );
+      };
+      possibleEventObject.preventDefault = () => {
+        showWarning('preventDefault()');
       };
       possibleEventObject.stopPropagation = () => {
-        // Update this warning when we have a story around dealing with stopPropgation
-        warning(
-          false,
-          'stopPropagation() is no longer available on event objects created from event responder modules.',
-        );
+        showWarning('stopPropagation()');
       };
+      possibleEventObject.isDefaultPrevented = () => {
+        showWarning('isDefaultPrevented()');
+      };
+      possibleEventObject.isPropagationStopped = () => {
+        showWarning('isPropagationStopped()');
+      };
+      // $FlowFixMe: we don't need value, Flow thinks we do
+      Object.defineProperty(possibleEventObject, 'nativeEvent', {
+        get() {
+          showWarning('nativeEvent');
+        },
+      });
+      // $FlowFixMe: we don't need value, Flow thinks we do
+      Object.defineProperty(possibleEventObject, 'defaultPrevented', {
+        get() {
+          showWarning('defaultPrevented');
+        },
+      });
     }
     const eventObject = ((possibleEventObject: any): $Shape<
       PartialEventObject,
@@ -163,35 +182,7 @@ const eventResponderContext: ReactResponderContext = {
     }
     return false;
   },
-  isTargetWithinEventComponent(target: Element | Document): boolean {
-    validateResponderContext();
-    if (target != null) {
-      let fiber = getClosestInstanceFromNode(target);
-      while (fiber !== null) {
-        if (fiber.stateNode === currentInstance) {
-          return true;
-        }
-        fiber = fiber.return;
-      }
-    }
-    return false;
-  },
-  isTargetDirectlyWithinEventComponent(target: Element | Document): boolean {
-    validateResponderContext();
-    if (target != null) {
-      let fiber = getClosestInstanceFromNode(target);
-      while (fiber !== null) {
-        if (fiber.stateNode === currentInstance) {
-          return true;
-        }
-        if (fiber.tag === EventComponent) {
-          return false;
-        }
-        fiber = fiber.return;
-      }
-    }
-    return false;
-  },
+  isTargetWithinEventComponent,
   isTargetWithinEventResponderScope(target: Element | Document): boolean {
     validateResponderContext();
     const responder = ((currentInstance: any): ReactEventComponentInstance)
@@ -235,32 +226,8 @@ const eventResponderContext: ReactResponderContext = {
     listenToResponderEventTypesImpl(rootEventTypes, activeDocument);
     for (let i = 0; i < rootEventTypes.length; i++) {
       const rootEventType = rootEventTypes[i];
-      const topLevelEventType =
-        typeof rootEventType === 'string' ? rootEventType : rootEventType.name;
-      let rootEventComponentInstances = rootEventTypesToEventComponentInstances.get(
-        topLevelEventType,
-      );
-      if (rootEventComponentInstances === undefined) {
-        rootEventComponentInstances = new Set();
-        rootEventTypesToEventComponentInstances.set(
-          topLevelEventType,
-          rootEventComponentInstances,
-        );
-      }
-      const componentInstance = ((currentInstance: any): ReactEventComponentInstance);
-      let rootEventTypesSet = componentInstance.rootEventTypes;
-      if (rootEventTypesSet === null) {
-        rootEventTypesSet = componentInstance.rootEventTypes = new Set();
-      }
-      invariant(
-        !rootEventTypesSet.has(topLevelEventType),
-        'addRootEventTypes() found a duplicate root event ' +
-          'type of "%s". This might be because the event type exists in the event responder "rootEventTypes" ' +
-          'array or because of a previous addRootEventTypes() using this root event type.',
-        rootEventType,
-      );
-      rootEventTypesSet.add(topLevelEventType);
-      rootEventComponentInstances.add(componentInstance);
+      const eventComponentInstance = ((currentInstance: any): ReactEventComponentInstance);
+      registerRootEventType(rootEventType, eventComponentInstance);
     }
   },
   removeRootEventTypes(
@@ -269,15 +236,31 @@ const eventResponderContext: ReactResponderContext = {
     validateResponderContext();
     for (let i = 0; i < rootEventTypes.length; i++) {
       const rootEventType = rootEventTypes[i];
-      const topLevelEventType =
-        typeof rootEventType === 'string' ? rootEventType : rootEventType.name;
+      let name = rootEventType;
+      let passive = true;
+
+      if (typeof rootEventType !== 'string') {
+        const targetEventConfigObject = ((rootEventType: any): {
+          name: string,
+          passive?: boolean,
+        });
+        name = targetEventConfigObject.name;
+        if (targetEventConfigObject.passive !== undefined) {
+          passive = targetEventConfigObject.passive;
+        }
+      }
+
+      const listeningName = generateListeningKey(
+        ((name: any): string),
+        passive,
+      );
       let rootEventComponents = rootEventTypesToEventComponentInstances.get(
-        topLevelEventType,
+        listeningName,
       );
       let rootEventTypesSet = ((currentInstance: any): ReactEventComponentInstance)
         .rootEventTypes;
       if (rootEventTypesSet !== null) {
-        rootEventTypesSet.delete(topLevelEventType);
+        rootEventTypesSet.delete(listeningName);
       }
       if (rootEventComponents !== undefined) {
         rootEventComponents.delete(
@@ -332,7 +315,7 @@ const eventResponderContext: ReactResponderContext = {
     if (timeout === undefined) {
       const timers = new Map();
       const id = setTimeout(() => {
-        processTimers(timers);
+        processTimers(timers, delay);
       }, delay);
       timeout = {
         id,
@@ -344,6 +327,7 @@ const eventResponderContext: ReactResponderContext = {
       instance: ((currentInstance: any): ReactEventComponentInstance),
       func,
       id: timerId,
+      timeStamp: currentTimeStamp,
     });
     activeTimeouts.set(timerId, timeout);
     return timerId;
@@ -395,7 +379,56 @@ const eventResponderContext: ReactResponderContext = {
     return focusableElements;
   },
   getActiveDocument,
+  objectAssign: Object.assign,
+  getEventPointerType(
+    event: ReactResponderEvent,
+  ): '' | 'mouse' | 'keyboard' | 'pen' | 'touch' {
+    const nativeEvent: any = event.nativeEvent;
+    const {type, pointerType} = nativeEvent;
+    if (pointerType != null) {
+      return pointerType;
+    }
+    if (type.indexOf('mouse') === 0) {
+      return 'mouse';
+    }
+    if (type.indexOf('touch') === 0) {
+      return 'touch';
+    }
+    if (type.indexOf('key') === 0) {
+      return 'keyboard';
+    }
+    return '';
+  },
+  getEventCurrentTarget(event: ReactResponderEvent): Element {
+    const target: any = event.target;
+    let currentTarget = target;
+    while (
+      currentTarget.parentNode &&
+      currentTarget.parentNode.nodeType === Node.ELEMENT_NODE &&
+      isTargetWithinEventComponent(currentTarget.parentNode)
+    ) {
+      currentTarget = currentTarget.parentNode;
+    }
+    return currentTarget;
+  },
+  getTimeStamp(): number {
+    return currentTimeStamp;
+  },
 };
+
+function isTargetWithinEventComponent(target: Element | Document): boolean {
+  validateResponderContext();
+  if (target != null) {
+    let fiber = getClosestInstanceFromNode(target);
+    while (fiber !== null) {
+      if (fiber.stateNode === currentInstance) {
+        return true;
+      }
+      fiber = fiber.return;
+    }
+  }
+  return false;
+}
 
 function getActiveDocument(): Document {
   const eventComponentInstance = ((currentInstance: any): ReactEventComponentInstance);
@@ -451,13 +484,17 @@ function isFiberHostComponentFocusable(fiber: Fiber): boolean {
   );
 }
 
-function processTimers(timers: Map<Symbol, ResponderTimer>): void {
+function processTimers(
+  timers: Map<Symbol, ResponderTimer>,
+  delay: number,
+): void {
   const timersArr = Array.from(timers.values());
   currentEventQueue = createEventQueue();
   try {
     for (let i = 0; i < timersArr.length; i++) {
-      const {instance, func, id} = timersArr[i];
+      const {instance, func, id, timeStamp} = timersArr[i];
       currentInstance = instance;
+      currentTimeStamp = timeStamp + delay;
       try {
         func();
       } finally {
@@ -469,6 +506,7 @@ function processTimers(timers: Map<Symbol, ResponderTimer>): void {
     currentTimers = null;
     currentInstance = null;
     currentEventQueue = null;
+    currentTimeStamp = 0;
   }
 }
 
@@ -476,14 +514,15 @@ function createResponderEvent(
   topLevelType: string,
   nativeEvent: AnyNativeEvent,
   nativeEventTarget: Element | Document,
-  eventSystemFlags: EventSystemFlags,
+  passive: boolean,
+  passiveSupported: boolean,
 ): ReactResponderEvent {
   const responderEvent = {
     nativeEvent: nativeEvent,
     target: nativeEventTarget,
     type: topLevelType,
-    passive: (eventSystemFlags & IS_PASSIVE) !== 0,
-    passiveSupported: (eventSystemFlags & PASSIVE_NOT_SUPPORTED) === 0,
+    passive,
+    passiveSupported,
   };
   if (__DEV__) {
     Object.freeze(responderEvent);
@@ -529,16 +568,31 @@ export function processEventQueue(): void {
 
 function getTargetEventTypesSet(
   eventTypes: Array<ReactEventResponderEventType>,
-): Set<DOMTopLevelEventType> {
+): Set<string> {
   let cachedSet = targetEventTypeCached.get(eventTypes);
 
   if (cachedSet === undefined) {
     cachedSet = new Set();
     for (let i = 0; i < eventTypes.length; i++) {
       const eventType = eventTypes[i];
-      const topLevelEventType =
-        typeof eventType === 'string' ? eventType : eventType.name;
-      cachedSet.add(((topLevelEventType: any): DOMTopLevelEventType));
+      let name = eventType;
+      let passive = true;
+
+      if (typeof eventType !== 'string') {
+        const targetEventConfigObject = ((eventType: any): {
+          name: string,
+          passive?: boolean,
+        });
+        name = targetEventConfigObject.name;
+        if (targetEventConfigObject.passive !== undefined) {
+          passive = targetEventConfigObject.passive;
+        }
+      }
+      const listeningName = generateListeningKey(
+        ((name: any): string),
+        passive,
+      );
+      cachedSet.add(listeningName);
     }
     targetEventTypeCached.set(eventTypes, cachedSet);
   }
@@ -546,7 +600,7 @@ function getTargetEventTypesSet(
 }
 
 function getTargetEventResponderInstances(
-  topLevelType: DOMTopLevelEventType,
+  listeningName: string,
   targetFiber: null | Fiber,
 ): Array<ReactEventComponentInstance> {
   const eventResponderInstances = [];
@@ -560,7 +614,7 @@ function getTargetEventResponderInstances(
       // Validate the target event type exists on the responder
       if (targetEventTypes !== undefined) {
         const targetEventTypesSet = getTargetEventTypesSet(targetEventTypes);
-        if (targetEventTypesSet.has(topLevelType)) {
+        if (targetEventTypesSet.has(listeningName)) {
           eventResponderInstances.push(eventComponentInstance);
         }
       }
@@ -571,11 +625,11 @@ function getTargetEventResponderInstances(
 }
 
 function getRootEventResponderInstances(
-  topLevelType: DOMTopLevelEventType,
+  listeningName: string,
 ): Array<ReactEventComponentInstance> {
   const eventResponderInstances = [];
   const rootEventInstances = rootEventTypesToEventComponentInstances.get(
-    topLevelType,
+    listeningName,
   );
   if (rootEventInstances !== undefined) {
     const rootEventComponentInstances = Array.from(rootEventInstances);
@@ -618,20 +672,28 @@ function traverseAndHandleEventResponderInstances(
   nativeEventTarget: EventTarget,
   eventSystemFlags: EventSystemFlags,
 ): void {
+  const isPassiveEvent = (eventSystemFlags & IS_PASSIVE) !== 0;
+  const isPassiveSupported = (eventSystemFlags & PASSIVE_NOT_SUPPORTED) === 0;
+  const listeningName = generateListeningKey(
+    ((topLevelType: any): string),
+    isPassiveEvent || !isPassiveSupported,
+  );
+
   // Trigger event responders in this order:
   // - Capture target phase
   // - Bubble target phase
   // - Root phase
 
   const targetEventResponderInstances = getTargetEventResponderInstances(
-    topLevelType,
+    listeningName,
     targetFiber,
   );
   const responderEvent = createResponderEvent(
     ((topLevelType: any): string),
     nativeEvent,
     ((nativeEventTarget: any): Element | Document),
-    eventSystemFlags,
+    isPassiveEvent,
+    isPassiveSupported,
   );
   const propagatedEventResponders: Set<ReactEventResponder> = new Set();
   let length = targetEventResponderInstances.length;
@@ -684,7 +746,7 @@ function traverseAndHandleEventResponderInstances(
   }
   // Root phase
   const rootEventResponderInstances = getRootEventResponderInstances(
-    topLevelType,
+    listeningName,
   );
   length = rootEventResponderInstances.length;
   if (length > 0) {
@@ -810,8 +872,11 @@ export function dispatchEventForResponderEventSystem(
     const previousEventQueue = currentEventQueue;
     const previousInstance = currentInstance;
     const previousTimers = currentTimers;
+    const previousTimeStamp = currentTimeStamp;
     currentTimers = null;
     currentEventQueue = createEventQueue();
+    // We might want to control timeStamp another way here
+    currentTimeStamp = (nativeEvent: any).timeStamp;
     try {
       traverseAndHandleEventResponderInstances(
         topLevelType,
@@ -825,6 +890,7 @@ export function dispatchEventForResponderEventSystem(
       currentTimers = previousTimers;
       currentInstance = previousInstance;
       currentEventQueue = previousEventQueue;
+      currentTimeStamp = previousTimeStamp;
     }
   }
 }
@@ -835,25 +901,63 @@ export function addRootEventTypesForComponentInstance(
 ): void {
   for (let i = 0; i < rootEventTypes.length; i++) {
     const rootEventType = rootEventTypes[i];
-    const topLevelEventType =
-      typeof rootEventType === 'string' ? rootEventType : rootEventType.name;
-    let rootEventComponentInstances = rootEventTypesToEventComponentInstances.get(
-      topLevelEventType,
-    );
-    if (rootEventComponentInstances === undefined) {
-      rootEventComponentInstances = new Set();
-      rootEventTypesToEventComponentInstances.set(
-        topLevelEventType,
-        rootEventComponentInstances,
-      );
+    registerRootEventType(rootEventType, eventComponentInstance);
+  }
+}
+
+function registerRootEventType(
+  rootEventType: ReactEventResponderEventType,
+  eventComponentInstance: ReactEventComponentInstance,
+): void {
+  let name = rootEventType;
+  let passive = true;
+
+  if (typeof rootEventType !== 'string') {
+    const targetEventConfigObject = ((rootEventType: any): {
+      name: string,
+      passive?: boolean,
+    });
+    name = targetEventConfigObject.name;
+    if (targetEventConfigObject.passive !== undefined) {
+      passive = targetEventConfigObject.passive;
     }
-    let rootEventTypesSet = eventComponentInstance.rootEventTypes;
-    if (rootEventTypesSet === null) {
-      rootEventTypesSet = eventComponentInstance.rootEventTypes = new Set();
-    }
-    rootEventTypesSet.add(topLevelEventType);
-    rootEventComponentInstances.add(
-      ((eventComponentInstance: any): ReactEventComponentInstance),
+  }
+
+  const listeningName = generateListeningKey(((name: any): string), passive);
+  let rootEventComponentInstances = rootEventTypesToEventComponentInstances.get(
+    listeningName,
+  );
+  if (rootEventComponentInstances === undefined) {
+    rootEventComponentInstances = new Set();
+    rootEventTypesToEventComponentInstances.set(
+      listeningName,
+      rootEventComponentInstances,
     );
   }
+  let rootEventTypesSet = eventComponentInstance.rootEventTypes;
+  if (rootEventTypesSet === null) {
+    rootEventTypesSet = eventComponentInstance.rootEventTypes = new Set();
+  }
+  invariant(
+    !rootEventTypesSet.has(listeningName),
+    'addRootEventTypes() found a duplicate root event ' +
+      'type of "%s". This might be because the event type exists in the event responder "rootEventTypes" ' +
+      'array or because of a previous addRootEventTypes() using this root event type.',
+    name,
+  );
+  rootEventTypesSet.add(listeningName);
+  rootEventComponentInstances.add(
+    ((eventComponentInstance: any): ReactEventComponentInstance),
+  );
+}
+
+export function generateListeningKey(
+  topLevelType: string,
+  passive: boolean,
+): string {
+  // Create a unique name for this event, plus its properties. We'll
+  // use this to ensure we don't listen to the same event with the same
+  // properties again.
+  const passiveKey = passive ? '_passive' : '_active';
+  return `${topLevelType}${passiveKey}`;
 }

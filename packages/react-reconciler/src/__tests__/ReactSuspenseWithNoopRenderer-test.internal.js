@@ -56,6 +56,10 @@ describe('ReactSuspenseWithNoopRenderer', () => {
     return {type: 'span', children: [], prop, hidden: false};
   }
 
+  function hiddenSpan(prop) {
+    return {type: 'span', children: [], prop, hidden: true};
+  }
+
   function advanceTimers(ms) {
     // Note: This advances Jest's virtual time but not React's. Use
     // ReactNoop.expire for that.
@@ -1715,12 +1719,126 @@ describe('ReactSuspenseWithNoopRenderer', () => {
 
     // Flush some of the time
     Scheduler.advanceTime(500);
-    await advanceTimers(500);
+    expect(() => {
+      jest.advanceTimersByTime(500);
+    }).toWarnDev(
+      'The following components suspended during a user-blocking ' +
+        'update: AsyncText',
+      {withoutStack: true},
+    );
+
     // We should have already shown the fallback.
     // When we wrote this test, we inferred the start time of high priority
     // updates as way earlier in the past. This test ensures that we don't
     // use this assumption to add a very long JND.
     expect(Scheduler).toFlushWithoutYielding();
     expect(ReactNoop.getChildren()).toEqual([span('Loading...')]);
+  });
+
+  it('warns when suspending inside discrete update', async () => {
+    function A() {
+      TextResource.read(['A', 1000]);
+      return 'A';
+    }
+
+    function B() {
+      return 'B';
+    }
+
+    function C() {
+      TextResource.read(['C', 1000]);
+      return 'C';
+    }
+
+    function App() {
+      return (
+        <Suspense fallback="Loading...">
+          <A />
+          <B />
+          <C />
+          <C />
+          <C />
+          <C />
+        </Suspense>
+      );
+    }
+
+    ReactNoop.interactiveUpdates(() => ReactNoop.render(<App />));
+    Scheduler.flushAll();
+
+    // Warning is not flushed until the commit phase
+
+    // Timeout and commit the fallback
+    expect(() => {
+      jest.advanceTimersByTime(1000);
+    }).toWarnDev(
+      'The following components suspended during a user-blocking update: A, C',
+      {withoutStack: true},
+    );
+  });
+
+  it('shows the parent boundary if the inner boundary should be avoided', async () => {
+    function Foo({showC}) {
+      Scheduler.yieldValue('Foo');
+      return (
+        <Suspense fallback={<Text text="Initial load..." />}>
+          <Suspense
+            unstable_avoidThisFallback={true}
+            fallback={<Text text="Updating..." />}>
+            <AsyncText text="A" ms={5000} />
+            {showC ? <AsyncText text="C" ms={5000} /> : null}
+          </Suspense>
+          <Text text="B" />
+        </Suspense>
+      );
+    }
+
+    ReactNoop.render(<Foo />);
+    expect(Scheduler).toFlushAndYield([
+      'Foo',
+      'Suspend! [A]',
+      'B',
+      'Initial load...',
+    ]);
+    // We're still suspended.
+    expect(ReactNoop.getChildren()).toEqual([]);
+    // Flush to skip suspended time.
+    Scheduler.advanceTime(600);
+    await advanceTimers(600);
+    expect(ReactNoop.getChildren()).toEqual([span('Initial load...')]);
+
+    // Eventually we resolve and show the data.
+    Scheduler.advanceTime(5000);
+    await advanceTimers(5000);
+    expect(Scheduler).toHaveYielded(['Promise resolved [A]']);
+    expect(Scheduler).toFlushAndYield(['A', 'B']);
+    expect(ReactNoop.getChildren()).toEqual([span('A'), span('B')]);
+
+    // Update to show C
+    ReactNoop.render(<Foo showC={true} />);
+    expect(Scheduler).toFlushAndYield([
+      'Foo',
+      'A',
+      'Suspend! [C]',
+      'Updating...',
+      'B',
+    ]);
+    // Flush to skip suspended time.
+    Scheduler.advanceTime(600);
+    await advanceTimers(600);
+    // Since the optional suspense boundary is already showing its content,
+    // we have to use the inner fallback instead.
+    expect(ReactNoop.getChildren()).toEqual([
+      hiddenSpan('A'),
+      span('Updating...'),
+      span('B'),
+    ]);
+
+    // Later we load the data.
+    Scheduler.advanceTime(5000);
+    await advanceTimers(5000);
+    expect(Scheduler).toHaveYielded(['Promise resolved [C]']);
+    expect(Scheduler).toFlushAndYield(['A', 'C']);
+    expect(ReactNoop.getChildren()).toEqual([span('A'), span('C'), span('B')]);
   });
 });

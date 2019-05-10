@@ -11,12 +11,13 @@ import type {
   ReactResponderEvent,
   ReactResponderContext,
 } from 'shared/ReactTypes';
-import {REACT_EVENT_COMPONENT_TYPE} from 'shared/ReactSymbols';
+
+import React from 'react';
 
 type FocusScopeProps = {
   autoFocus: Boolean,
+  contain: Boolean,
   restoreFocus: Boolean,
-  trap: Boolean,
 };
 
 type FocusScopeState = {
@@ -25,16 +26,23 @@ type FocusScopeState = {
 };
 
 const targetEventTypes = [{name: 'keydown', passive: false}];
-const rootEventTypes = [{name: 'focus', passive: true, capture: true}];
+const rootEventTypes = [{name: 'focus', passive: true}];
 
-function focusFirstChildEventTarget(
+function focusElement(element: ?HTMLElement) {
+  if (element != null) {
+    try {
+      element.focus();
+    } catch (err) {}
+  }
+}
+
+function getFirstFocusableElement(
   context: ReactResponderContext,
   state: FocusScopeState,
-): void {
+): ?HTMLElement {
   const elements = context.getFocusableElementsInScope();
   if (elements.length > 0) {
-    const firstElement = elements[0];
-    firstElement.focus();
+    return elements[0];
   }
 }
 
@@ -78,7 +86,7 @@ const FocusScopeResponder = {
 
         if (shiftKey) {
           if (position === 0) {
-            if (props.trap) {
+            if (props.contain) {
               nextElement = elements[lastPosition];
             } else {
               // Out of bounds
@@ -90,7 +98,7 @@ const FocusScopeResponder = {
           }
         } else {
           if (position === lastPosition) {
-            if (props.trap) {
+            if (props.contain) {
               nextElement = elements[0];
             } else {
               // Out of bounds
@@ -107,7 +115,7 @@ const FocusScopeResponder = {
           if (!context.isTargetWithinEventResponderScope(nextElement)) {
             context.releaseOwnership();
           }
-          nextElement.focus();
+          focusElement(nextElement);
           state.currentFocusedNode = nextElement;
           ((nativeEvent: any): KeyboardEvent).preventDefault();
         }
@@ -122,14 +130,15 @@ const FocusScopeResponder = {
   ) {
     const {target} = event;
 
-    // Handle global trapping
-    if (props.trap) {
+    // Handle global focus containment
+    if (props.contain) {
       if (!context.isTargetWithinEventComponent(target)) {
         const currentFocusedNode = state.currentFocusedNode;
         if (currentFocusedNode !== null) {
-          currentFocusedNode.focus();
+          focusElement(currentFocusedNode);
         } else if (props.autoFocus) {
-          focusFirstChildEventTarget(context, state);
+          const firstElement = getFirstFocusableElement(context, state);
+          focusElement(firstElement);
         }
       }
     }
@@ -143,7 +152,8 @@ const FocusScopeResponder = {
       state.nodeToRestore = context.getActiveDocument().activeElement;
     }
     if (props.autoFocus) {
-      focusFirstChildEventTarget(context, state);
+      const firstElement = getFirstFocusableElement(context, state);
+      focusElement(firstElement);
     }
   },
   onUnmount(
@@ -156,7 +166,7 @@ const FocusScopeResponder = {
       state.nodeToRestore !== null &&
       context.hasOwnership()
     ) {
-      state.nodeToRestore.focus();
+      focusElement(state.nodeToRestore);
     }
   },
   onOwnershipChange(
@@ -170,9 +180,7 @@ const FocusScopeResponder = {
   },
 };
 
-export default {
-  $$typeof: REACT_EVENT_COMPONENT_TYPE,
-  displayName: 'FocusScope',
-  props: null,
-  responder: FocusScopeResponder,
-};
+export default React.unstable_createEventComponent(
+  FocusScopeResponder,
+  'FocusScope',
+);
